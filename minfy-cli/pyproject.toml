@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minfy"
+version = "0.0.1"
+description = "Tiny Vercel‑like deploy CLI"
+authors = [
+  { name = "Sofiyan‑Minfy", email = "syed.sofiyan@minfytech.com" }
+]
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+  "click>=8.1,<9.0",
+  "pydantic>=2.7,<2.8",
+  "boto3>=1.34,<2.0",
+  "PyYAML>=6.0,<7.0",
+]
+
+[project.scripts]
+minfy = "minfy.cli:cli"
