@@ -10,7 +10,6 @@ DEFAULT_ENVS = {
     e: {"vars": {}, "build_cmd": "npm run build"} for e in ["dev", "staging", "prod"]
 }
 
-
 @click.command("init")
 @click.option(
     "--repo",
@@ -19,7 +18,6 @@ DEFAULT_ENVS = {
     help="URL of the Git repo to deploy (https://…/.git)",
 )
 def init_cmd(repo: str):
-    """Clone repo locally and capture basic deploy settings."""
     _ensure_git()
 
     WORKSPACE.mkdir(exist_ok=True)
@@ -77,13 +75,11 @@ def init_cmd(repo: str):
         "and create the build plan."
     )
 
-
 def _ensure_git():
     if shutil.which("git"):
         return
     click.secho("git is not installed or not on PATH.", fg="red")
     sys.exit(1)
-
 
 def _run(cmd: list[str]):
     try:
@@ -91,7 +87,6 @@ def _run(cmd: list[str]):
     except subprocess.CalledProcessError as e:
         click.secho(f"Command failed: {' '.join(cmd)}", fg="red")
         sys.exit(e.returncode)
-
 
 def _repo_folder_name(url: str) -> str:
     name = url.rstrip("/").split("/")[-1]

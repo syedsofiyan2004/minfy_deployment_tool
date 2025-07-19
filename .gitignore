@@ -1,6 +1,7 @@
 venv
 tests
 .minfy_workspace
+.minfy_monitor
 .pytest_cache
 .minfy.json
 build.json

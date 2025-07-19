@@ -13,7 +13,6 @@ def _parse_env_file(path: Path) -> dict[str, str]:
     }
 
 def _inject_env_into_dockerfile(src: Path, env_keys: list[str]) -> Path:
-    """Return a temp Dockerfile path with ARG+ENV lines injected."""
     dst = Path(tempfile.mkdtemp()) / "Dockerfile.build"
     lines = src.read_text(encoding="utf-8").splitlines(keepends=True)
     inject_at = next(
@@ -51,7 +50,9 @@ def deploy_cmd(env_file):
     docker_ok = shutil.which("docker")
     npm_ok    = shutil.which("npm")
     need_docker = build.get("requires_docker", False)
-
+    builder     = build.get("builder", "custom")
+    if builder == "angular" and "NODE_OPTIONS" not in envvars:
+        envvars["NODE_OPTIONS"] = "--openssl-legacy-provider"
     def _docker_build() -> Path:
         tag = f"minfy-build-{uuid.uuid4().hex[:6]}"
         df  = _inject_env_into_dockerfile(appdir / "Dockerfile.build", list(envvars))
@@ -65,7 +66,6 @@ def deploy_cmd(env_file):
         subprocess.check_call(["docker", "cp", f"{cid}:/static/.", str(tmp)])
         subprocess.check_call(["docker", "rm", cid])
         return tmp
-
     try:
         if not need_docker and npm_ok:
             click.secho("Building on host …", fg="cyan")
@@ -130,7 +130,6 @@ def deploy_cmd(env_file):
                 prog.advance(task)
     head_ver = s3.head_object(Bucket=bucket, Key="index.html")["VersionId"]
     s3.put_object(Bucket=bucket, Key="__minfy_current.txt", Body=head_ver)
-
     url = f"http://{bucket}.s3-website.{region}.amazonaws.com"
     click.secho(f" Deployed → {url}", fg="green")
     click.echo("Next → 'minfy status' or 'minfy rollback'.")
