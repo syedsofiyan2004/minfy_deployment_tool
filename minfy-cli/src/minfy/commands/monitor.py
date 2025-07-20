@@ -320,6 +320,7 @@ def enable():
 
     rprint(f":satellite:  Prometheus → {out['prometheus_url']['value']}")
     rprint(f":bar_chart:  Grafana    → {out['grafana_url']['value']}   (admin/admin)")
+    rprint("Next → Run [cyan]minfy monitor status[/cyan] to view your stack or [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
 
 
 @monitor_grp.command("status")
@@ -331,6 +332,20 @@ def status():
         return
     rprint(f":satellite:  Prometheus → {out['prometheus_url']['value']}")
     rprint(f":bar_chart:  Grafana    → {out['grafana_url']['value']}")
+    rprint("Next → Run [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
+  
+@monitor_grp.command("init")
+def init():
+    """Initialize local monitoring stack (docker-compose + Prometheus)"""
+    try:
+        site = _site_url()
+    except Exception:
+        click.secho("Run ‘minfy deploy’ first.", fg="red"); sys.exit(1)
+    MON_DIR.mkdir(exist_ok=True)
+    (MON_DIR / "docker-compose.yml").write_text(_COMPOSE_TPL)
+    (MON_DIR / "prometheus.yml").write_text(_PROM_TPL.format(url=site))
+    rprint(":white_check_mark: Local files created in .minfy_monitor")
+    rprint("Next → [cyan]minfy monitor enable[/cyan] to provision on AWS .")
 
 
 @monitor_grp.command("dashboard")
@@ -339,7 +354,37 @@ def dashboard():
         url = _tf_output()['grafana_url']['value']
     except Exception:
         click.secho("No monitoring stack – run ‘enable’ first.", fg="yellow"); return
-    # import any dashboards in provisioning folder
+    # ensure default dashboard JSON exists, using project name
+    project = Path.cwd().name
+    site = _site_url()
+    db_dir = MON_DIR / "provisioning" / "dashboards"
+    db_dir.mkdir(parents=True, exist_ok=True)
+    # if no custom JSON, generate default metrics dashboard
+    if not any(db_dir.glob('*.json')):
+        uid = f"{project}-monitoring"
+        title = f"{project} Monitoring"
+        default_dash = {
+            "id": None,
+            "uid": uid,
+            "title": title,
+            "timezone": "browser",
+            "panels": [
+                {"type": "timeseries", "title": "Uptime (%)",
+                 "gridPos": {"h":8,"w":12,"x":0,"y":0},
+                 "targets": [{"expr": f"avg_over_time(probe_success{{instance='{site}'}}[5m]) * 100"}]},
+                {"type": "timeseries", "title": "Latency P95 (s)",
+                 "gridPos": {"h":8,"w":12,"x":12,"y":0},
+                 "targets": [{"expr": f"histogram_quantile(0.95, sum by(le) (rate(probe_duration_seconds_bucket{{instance='{site}'}}[5m])))"}]},
+                {"type": "timeseries", "title": "Redirects/sec",
+                 "gridPos": {"h":8,"w":12,"x":0,"y":8},
+                 "targets": [{"expr": f"rate(probe_http_redirects{{instance='{site}'}}[5m])"}]},
+                {"type": "timeseries", "title": "Avg Content Size (bytes)",
+                 "gridPos": {"h":8,"w":12,"x":12,"y":8},
+                 "targets": [{"expr": f"avg_over_time(probe_http_content_length{{instance='{site}'}}[5m])"}]}
+            ]
+        }
+        file = db_dir / f"{uid}.json"
+        file.write_text(json.dumps(default_dash, indent=2))
     prov = MON_DIR / "provisioning" / "dashboards"
     if prov.exists():
         for json_file in prov.glob('*.json'):
@@ -360,9 +405,21 @@ def dashboard():
                 rprint(f":white_check_mark: Imported dashboard {json_file.name}")
             except Exception as e:
                 click.secho(f"Failed to import {json_file.name}: {e}", fg="red")
-    # open Grafana UI
-    webbrowser.open(url)
-    rprint(f":sparkles:  Opening → {url}")
+
+    dash_uids = []
+    prov = MON_DIR / "provisioning" / "dashboards"
+    for json_file in prov.glob('*.json'):
+        try:
+            dash = json.loads(json_file.read_text())
+            dash_uids.append(dash.get('uid'))
+        except: pass
+    if dash_uids:
+        dash_url = f"{url}/d/{dash_uids[0]}"
+    else:
+        dash_url = url
+    webbrowser.open(dash_url)
+    rprint(f":sparkles:  Opening dashboard → {dash_url}")
+    rprint("Next → Run [cyan]minfy monitor diable[/cyan] to remove monitoring stack.")
 
 
 @monitor_grp.command("disable")
