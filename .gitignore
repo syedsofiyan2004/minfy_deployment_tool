@@ -1,5 +1,4 @@
 venv
-tests
 .minfy_workspace
 .minfy_monitor
 .pytest_cache
@@ -8,18 +7,14 @@ build.json
 .pre-commit-config.yaml
 __pycache__
 minfy.egg-info
-__init__.py
 /node_modules
 /.pnp
 .pnp.js
 .ruff_cache
-# testing
 /coverage
 
-# production
 /build
-
-# misc
+.minfy
 .DS_Store
 .env.local
 .env.development.local

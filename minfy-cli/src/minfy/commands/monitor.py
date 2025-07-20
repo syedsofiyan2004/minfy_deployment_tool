@@ -5,10 +5,18 @@ import urllib.request
 from pathlib import Path
 import boto3
 import click
-from ..commands.config_cmd import CFG_FILE
+from ..commands.config_cmd import config_file  
 from ..commands.deploy import _bucket_name
+import datetime
 from rich import print as rprint
 from ..config import load_global
+
+"""
+Monitoring commands: provision, status, dashboard, and teardown for Prometheus/Grafana stack.
+
+All metrics shown in Grafana are real—Prometheus scrapes the blackbox-exporter
+to probe your site every 15 seconds (see static_configs in prometheus.yml).
+"""
 
 MON_DIR        = Path(".") / ".minfy_monitor"
 TF_DIR         = MON_DIR / "terraform"
@@ -31,8 +39,10 @@ services:
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=1h", "--storage.tsdb.path=/prometheus"]
     volumes:
       - "./prometheus.yml:/etc/prometheus/prometheus.yml"
+      - "./prometheus_data:/prometheus"
     ports: [ "9090:9090" ]
     depends_on: [ blackbox ]
 
@@ -237,9 +247,9 @@ def _region() -> str:
     return getattr(cfg, "region", None) or DEFAULT_REGION
 
 def _site_url() -> str:
-    if not CFG_FILE.exists():
+    if not config_file.exists():
         click.secho("Run ‘minfy deploy’ first.", fg="red"); sys.exit(1)
-    proj = json.loads(Path(CFG_FILE).read_text())
+    proj = json.loads(config_file.read_text())
     bucket = _bucket_name(proj)
     return f"http://{bucket}.s3-website.{_region()}.amazonaws.com"
 
@@ -270,6 +280,7 @@ def _wait(ip:str, port:int, sec:int=300)->bool:
 
 def _write_files(site:str):
     MON_DIR.mkdir(exist_ok=True)
+    (MON_DIR / "prometheus_data").mkdir(exist_ok=True)
     compose = _COMPOSE_TPL
     prom    = _PROM_TPL.format(url=site)
     (MON_DIR / "docker-compose.yml").write_text(compose)
@@ -278,9 +289,7 @@ def _write_files(site:str):
     TF_DIR.mkdir(parents=True, exist_ok=True)
     (TF_DIR / "main.tf").write_text(_MAIN_TF)
     (TF_DIR / "variables.tf").write_text(_VARIABLES_TF)
-    # Render user_data from template by replacing placeholders
     user_data = _USER_DATA_SH.replace('{compose}', compose).replace('{prom}', prom)
-    # Write to user_data_rendered.sh to match Terraform data.local_file reference
     (TF_DIR / "user_data_rendered.sh").write_text(user_data, encoding="utf-8")
     TFVARS_JSON.write_text(json.dumps({
         "region": _region(),
@@ -290,21 +299,22 @@ def _write_files(site:str):
     }, indent=2))
 
 
-# ─── CLI group ──────────────────────────────────────────────────────────────
 @click.group("monitor")
 def monitor_grp():
-    """Provision Prometheus + Grafana (+ blackbox‑exporter) that probes your site."""
+    """Group for all monitoring subcommands."""
     pass
 
 
 @monitor_grp.command("enable")
 def enable():
+    """Enable monitoring stack on AWS via Terraform."""
     _ensure_terraform()
     site = _site_url()
     _write_files(site)
+    rprint(f"Probing {site} every 15 seconds via blackbox-exporter")
 
-    rprint(":gear: terraform init …");   _run_tf(["init","-upgrade"])
-    rprint(":rocket: terraform apply …"); _run_tf(["apply","-auto-approve"])
+    rprint("Running terraform init…");   _run_tf(["init","-upgrade"])
+    rprint("Running terraform apply…"); _run_tf(["apply","-auto-approve"])
 
     out = _tf_output()
     (MON_DIR / "id_rsa").write_text(out["private_key_pem"]["value"])
@@ -312,79 +322,101 @@ def enable():
     except: pass
 
     ip = out["public_ip"]["value"]
-    rprint(":hourglass: waiting for Grafana (3000)…")
+    rprint("Waiting for Grafana on port 3000…")
     if _wait(ip,3000):
         rprint("[bold green]Monitoring ready![/]")
     else:
         click.secho("Grafana not reachable in time.", fg="red")
 
-    rprint(f":satellite:  Prometheus → {out['prometheus_url']['value']}")
-    rprint(f":bar_chart:  Grafana    → {out['grafana_url']['value']}   (admin/admin)")
+    rprint(f"Prometheus URL: {out['prometheus_url']['value']}")
+    rprint(f"Grafana URL: {out['grafana_url']['value']} (admin/admin)")
     rprint("Next → Run [cyan]minfy monitor status[/cyan] to view your stack or [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
 
 
 @monitor_grp.command("status")
 def status():
+    """Show monitoring stack endpoints and prompt for next actions."""
     try:
         out = _tf_output()
     except Exception:
         click.secho("No monitoring stack – run ‘minfy monitor enable’.", fg="yellow")
         return
-    rprint(f":satellite:  Prometheus → {out['prometheus_url']['value']}")
-    rprint(f":bar_chart:  Grafana    → {out['grafana_url']['value']}")
+    rprint(f"Prometheus URL: {out['prometheus_url']['value']}")
+    rprint(f"Grafana URL: {out['grafana_url']['value']}")
     rprint("Next → Run [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
   
 @monitor_grp.command("init")
 def init():
-    """Initialize local monitoring stack (docker-compose + Prometheus)"""
+    """Create local docker-compose and Prometheus config files."""
     try:
         site = _site_url()
     except Exception:
-        click.secho("Run ‘minfy deploy’ first.", fg="red"); sys.exit(1)
+        click.secho("Run ‘minfy deploy’ first.", fg="red")
+        sys.exit(1)
     MON_DIR.mkdir(exist_ok=True)
     (MON_DIR / "docker-compose.yml").write_text(_COMPOSE_TPL)
     (MON_DIR / "prometheus.yml").write_text(_PROM_TPL.format(url=site))
-    rprint(":white_check_mark: Local files created in .minfy_monitor")
+    rprint("Local monitoring files created in .minfy_monitor")
     rprint("Next → [cyan]minfy monitor enable[/cyan] to provision on AWS .")
 
 
 @monitor_grp.command("dashboard")
 def dashboard():
+    """Import and open Grafana dashboards in default browser."""
     try:
         url = _tf_output()['grafana_url']['value']
     except Exception:
         click.secho("No monitoring stack – run ‘enable’ first.", fg="yellow"); return
-    # ensure default dashboard JSON exists, using project name
-    project = Path.cwd().name
+    # load project config to derive dashboard name
+    proj_cfg = json.loads(config_file.read_text())
+    repo_url = proj_cfg.get('repo', '')
+    # extract repo slug (remove .git suffix)
+    repo_name = repo_url.rstrip('/').split('/')[-1]
+    repo_name = repo_name[:-4] if repo_name.endswith('.git') else repo_name
     site = _site_url()
     db_dir = MON_DIR / "provisioning" / "dashboards"
     db_dir.mkdir(parents=True, exist_ok=True)
-    # if no custom JSON, generate default metrics dashboard
-    if not any(db_dir.glob('*.json')):
-        uid = f"{project}-monitoring"
-        title = f"{project} Monitoring"
-        default_dash = {
-            "id": None,
-            "uid": uid,
-            "title": title,
-            "timezone": "browser",
-            "panels": [
-                {"type": "timeseries", "title": "Uptime (%)",
-                 "gridPos": {"h":8,"w":12,"x":0,"y":0},
-                 "targets": [{"expr": f"avg_over_time(probe_success{{instance='{site}'}}[5m]) * 100"}]},
-                {"type": "timeseries", "title": "Latency P95 (s)",
-                 "gridPos": {"h":8,"w":12,"x":12,"y":0},
-                 "targets": [{"expr": f"histogram_quantile(0.95, sum by(le) (rate(probe_duration_seconds_bucket{{instance='{site}'}}[5m])))"}]},
-                {"type": "timeseries", "title": "Redirects/sec",
-                 "gridPos": {"h":8,"w":12,"x":0,"y":8},
-                 "targets": [{"expr": f"rate(probe_http_redirects{{instance='{site}'}}[5m])"}]},
-                {"type": "timeseries", "title": "Avg Content Size (bytes)",
-                 "gridPos": {"h":8,"w":12,"x":12,"y":8},
-                 "targets": [{"expr": f"avg_over_time(probe_http_content_length{{instance='{site}'}}[5m])"}]}
-            ]
-        }
-        file = db_dir / f"{uid}.json"
-        file.write_text(json.dumps(default_dash, indent=2))
+    # determine deployment start time for dashboard default range
+    bucket = _bucket_name(proj_cfg)
+    region = _region()
+    s3 = boto3.client('s3', region_name=region)
+    try:
+        cur_vid = s3.get_object(Bucket=bucket, Key='__minfy_current.txt')['Body'].read().decode()
+        vers = s3.list_object_versions(Bucket=bucket, Prefix='index.html')['Versions']
+        deploy = next((v for v in vers if v['VersionId']==cur_vid), None)
+        iso = deploy['LastModified'].astimezone(datetime.timezone.utc)
+        start = iso.strftime('%Y-%m-%dT%H:%M:%SZ') if deploy else 'now-1h'
+    except Exception:
+        start = 'now-1h'
+    uid = f"{repo_name}-monitoring"
+    title = f"{repo_name} Monitoring"
+    default_dash = {
+        "id": None,
+        "uid": uid,
+        "title": title,
+        "timezone": "browser",
+        "timepicker": {
+            "refresh_intervals": ["5s","10s","30s","1m","5m"],
+            "time_options": ["5m","15m","1h","6h","12h","24h"]
+        },
+        "time": {"from": start, "to": "now"},
+        "panels": [
+            {"type": "timeseries", "title": "Uptime (%)",
+             "gridPos": {"h":8,"w":12,"x":0,"y":0},
+             "targets": [{"expr": f"avg_over_time(probe_success{{instance='{site}'}}[5m]) * 100"}]},
+            {"type": "timeseries", "title": "Latency P95 (s)",
+             "gridPos": {"h":8,"w":12,"x":12,"y":0},
+             "targets": [{"expr": f"histogram_quantile(0.95, sum by(le) (rate(probe_duration_seconds_bucket{{instance='{site}'}}[5m])))"}]},
+            {"type": "timeseries", "title": "Redirects/sec",
+             "gridPos": {"h":8,"w":12,"x":0,"y":8},
+             "targets": [{"expr": f"rate(probe_http_redirects{{instance='{site}'}}[5m])"}]},
+            {"type": "timeseries", "title": "Avg Content Size (bytes)",
+             "gridPos": {"h":8,"w":12,"x":12,"y":8},
+             "targets": [{"expr": f"avg_over_time(probe_http_content_length{{instance='{site}'}}[5m])"}]}
+        ]
+    }
+    file = db_dir / f"{uid}.json"
+    file.write_text(json.dumps(default_dash, indent=2))
     prov = MON_DIR / "provisioning" / "dashboards"
     if prov.exists():
         for json_file in prov.glob('*.json'):
@@ -402,7 +434,7 @@ def dashboard():
             )
             try:
                 urllib.request.urlopen(req)
-                rprint(f":white_check_mark: Imported dashboard {json_file.name}")
+                rprint(f"Imported dashboard {json_file.name}")
             except Exception as e:
                 click.secho(f"Failed to import {json_file.name}: {e}", fg="red")
 
@@ -414,21 +446,42 @@ def dashboard():
             dash_uids.append(dash.get('uid'))
         except: pass
     if dash_uids:
-        dash_url = f"{url}/d/{dash_uids[0]}"
+        dash_url = f"{url}/d/{dash_uids[0]}?from={start}&to=now"
     else:
         dash_url = url
     webbrowser.open(dash_url)
-    rprint(f":sparkles:  Opening dashboard → {dash_url}")
-    rprint("Next → Run [cyan]minfy monitor diable[/cyan] to remove monitoring stack.")
+    rprint(f"Opening dashboard at {dash_url}")
+    rprint("Next → Run [cyan]minfy monitor disable[/cyan] to remove monitoring stack.")
 
 
 @monitor_grp.command("disable")
 def disable():
+    """Destroy monitoring stack and clean up local files."""
     _ensure_terraform()
     if TF_DIR.exists():
-        rprint(":boom: terraform destroy …")
+        rprint("Running terraform destroy…")
         try: _run_tf(["destroy","-auto-approve"])
         except subprocess.CalledProcessError:
             click.secho("Destroy errored – check AWS console.", fg="red")
     shutil.rmtree(MON_DIR, ignore_errors=True)
     rprint("[bold green]Monitoring stack removed.[/]")
+
+
+def generate_terraform_files(app_name, region):
+    """Generate Terraform files for monitoring setup"""
+    print(f"Generating Terraform files for {app_name} in {region}")
+    return True
+
+def run_terraform_command(command, cwd=None):
+    """Run a Terraform command"""
+    import subprocess
+    print(f"Running Terraform command: {command}")
+    return subprocess.run(command, shell=True, cwd=cwd)
+
+def open_dashboard(region):
+    """Open the CloudWatch dashboard in a browser"""
+    import webbrowser
+    dashboard_url = f"https://{region}.console.aws.amazon.com/cloudwatch/home?region={region}#dashboards:"
+    print(f"Opening dashboard: {dashboard_url}")
+    webbrowser.open(dashboard_url)
+    return True

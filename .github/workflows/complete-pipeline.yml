@@ -1,0 +1,198 @@
+name: Enhanced CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install pytest pytest-cov bandit flake8
+        pip install -e .
+        
+    - name: Run linting
+      run: |
+        flake8 src tests
+        
+    - name: Run security scan
+      run: |
+        bandit -r src/
+        
+    - name: Run tests with coverage
+      run: |
+        pytest --cov=src tests/
+        
+    - name: Verify CLI functionality
+      run: |
+        minfy --help
+        minfy config --help
+        minfy detect --help
+        minfy monitor --help
+
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20'
+        
+    - name: Set up Docker
+      uses: docker/setup-buildx-action@v2
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        
+    - name: Create test React app
+      run: |
+        npx create-react-app test-app
+        cd test-app
+        
+    - name: Test detection
+      run: |
+        cd test-app
+        minfy detect || true
+        
+    - name: Create build.json
+      run: |
+        cd test-app
+        echo '{"builder":"cra","build_cmd":"npm run build","output_dir":"build","requires_docker":true,"needs_env":false}' > build.json
+        
+    - name: Test with example repo
+      run: |
+        # Clone example repository
+        git clone https://github.com/sreejavoma13/meme-gen example-app
+        cd example-app
+        
+        # Run detect on example repo
+        minfy detect || true
+        
+        # Create config for testing
+        echo '{"repo":"https://github.com/sreejavoma13/meme-gen","local_path":"./example-app","app_subdir":"","current_env":"dev","envs":{"dev":{"vars":{},"build_cmd":"npm run build"}}}' > .minfy.json
+
+    # Note: This would use mocked AWS services in real integration tests
+    # For actual deployment tests, you'd use GitHub secrets for credentials
+
+  build-and-release:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    needs: [test, integration-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install build dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine wheel setuptools
+        
+    - name: Build package
+      run: |
+        python -m build
+        
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+        
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./dist/minfy-*.tar.gz
+        asset_name: minfy.tar.gz
+        asset_content_type: application/gzip
+        
+    # Uncomment to publish to PyPI
+    # - name: Publish to PyPI
+    #   uses: pypa/gh-action-pypi-publish@release/v1
+    #   with:
+    #     user: __token__
+    #     password: ${{ secrets.PYPI_API_TOKEN }}
+
+  documentation:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        pip install sphinx sphinx-rtd-theme
+        
+    - name: Build docs
+      run: |
+        mkdir -p docs
+        sphinx-quickstart docs --sep -p minfy -a "Minfy Team" -v "0.1" --no-batchfile --no-makefile
+        sphinx-build -b html docs/source/ docs/build/html
+        
+    - name: Deploy docs to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v3
+      if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs/build/html

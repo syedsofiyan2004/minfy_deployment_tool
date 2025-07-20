@@ -1,85 +1,69 @@
 import json
 from pathlib import Path
 import click
-from rich import print as rprint
 
-CFG_FILE = Path(".minfy.json")
-DEFAULT_ENV = "dev"
-DEFAULT_ENVS = {
-    e: {"vars": {}, "build_cmd": "npm run build"} for e in ["dev", "staging", "prod"]
+config_file = Path('.minfy.json')
+DEFAULT_ENV_NAME = 'dev'
+DEFAULT_ENVIRONMENTS = {
+    'dev': {'vars': {}, 'build_cmd': 'npm run build'},
+    'staging': {'vars': {}, 'build_cmd': 'npm run build'},
+    'prod': {'vars': {}, 'build_cmd': 'npm run build'},
 }
+def load_config() -> dict:
+    if config_file.exists():
+        data = json.loads(config_file.read_text())
+    else:
+        data = {}
+    if 'current_env' not in data:
+        data['current_env'] = DEFAULT_ENV_NAME
+    if 'envs' not in data:
+        data['envs'] = DEFAULT_ENVIRONMENTS.copy()
+    return data
 
+def save_config(settings: dict):
+    config_file.write_text(json.dumps(settings, indent=2))
 
-def _load() -> dict:
-    cfg = {}
-    if CFG_FILE.exists():
-        cfg = json.loads(CFG_FILE.read_text())
-
-    cfg.setdefault("current_env", DEFAULT_ENV)
-    cfg.setdefault("envs", DEFAULT_ENVS.copy())
-    return cfg
-
-
-def _save(cfg: dict):
-    CFG_FILE.write_text(json.dumps(cfg, indent=2))
-
-
-@click.group("config")
+@click.group('config')
 def config_grp():
-    """Manage per‑project config (env vars, build settings, environments)."""
     pass
-
-
-@config_grp.command("set")
-@click.argument("pair")
+@config_grp.command('set')
+@click.argument('pair')
 def set_var(pair):
-    """Add or update an environment variable:  KEY=VALUE"""
-    if "=" not in pair:
-        click.secho("Use KEY=VALUE syntax.", fg="red")
+    if '=' not in pair:
+        click.secho('Invalid format, use KEY=VALUE.', fg='red')
         raise click.Abort()
+    k, v = pair.split('=', 1)
+    settings = load_config()
+    env = settings['current_env']
+    settings['envs'][env]['vars'][k] = v
+    save_config(settings)
+    click.secho(f'{k} set in environment [{env}]', fg='green')
+    click.echo('Next, run minfy deploy when ready.')
 
-    key, val = pair.split("=", 1)
-    cfg = _load()
-    env = cfg["current_env"]
-    cfg["envs"][env]["vars"][key] = val
-    _save(cfg)
-    click.secho(f"✓ {key} set for [{env}]", fg="green")
-    rprint("[bold]Next →[/bold] Run [cyan]minfy deploy[/cyan] when ready.")
-
-
-@config_grp.command("list")
+@config_grp.command('list')
 def list_vars():
-    """Show variables & build cmd for the active environment."""
-    cfg = _load()
-    env = cfg["current_env"]
-    data = cfg["envs"][env]
-    rprint(f"[bold cyan]Environment → {env}[/bold cyan]")
-    rprint(f"Build command : {data['build_cmd']}")
-    rprint("Vars:")
-    for k, v in data["vars"].items():
-        rprint(f"  {k} = {v}")
-    rprint(
-        "[bold]Next →[/bold] Use [cyan]minfy config env NAME[/cyan] "
-        "to switch environments."
-    )
+    settings = load_config()
+    env = settings['current_env']
+    data = settings['envs'][env]
+    click.echo(f'Environment: {env}')
+    click.echo(f"Build command: {data['build_cmd']}")
+    if data['vars']:
+        click.echo('Variables:')
+        for k, v in data['vars'].items():
+            click.echo(f'  {k} = {v}')
+    else:
+        click.echo('No variables set.')
+    click.echo('To change environment, run: minfy config env NAME')
 
-
-@config_grp.command("env")
-@click.argument("name")
+@config_grp.command('env')
+@click.argument('name')
 def switch_env(name):
-    """Switch active environment (dev / staging / prod)."""
-    cfg = _load()
-    if name not in cfg["envs"]:
-        click.secho(
-            f"Unknown env '{name}'. Available: {', '.join(cfg['envs'].keys())}",
-            fg="red",
-        )
+    settings = load_config()
+    if name not in settings['envs']:
+        click.secho(f"Unknown environment: {name}", fg='red')
+        click.echo(f"Available environments: {', '.join(settings['envs'].keys())}")
         raise click.Abort()
-
-    cfg["current_env"] = name
-    _save(cfg)
-    click.secho(f"Current environment set to {name}", fg="green")
-    rprint(
-        "[bold]Next →[/bold] Set variables with "
-        "[cyan]minfy config set KEY=VALUE[/cyan] or run [cyan]minfy deploy[/cyan]."
-    )
+    settings['current_env'] = name
+    save_config(settings)
+    click.secho(f'Environment changed to {name}', fg='green')
+    click.echo('Now set variables or run minfy deploy.')

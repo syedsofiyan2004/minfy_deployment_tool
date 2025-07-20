@@ -1,25 +1,25 @@
 from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field, ValidationError
-
-HOME_DIR = Path.home() / ".minfy"
+HOME_DIR = Path('.') / '.minfy'
 GLOBAL_CFG = HOME_DIR / "config.yaml"
-HOME_DIR.mkdir(exist_ok=True, mode=0o700)
-
+HOME_DIR.mkdir(exist_ok=True)
 
 class AWSAuth(BaseModel):
     access_key: str = Field(..., alias="aws_access_key_id")
     secret_key: str = Field(..., alias="aws_secret_access_key")
+    session_token: str | None = Field(None, alias="aws_session_token")
     region: str = "ap-south-1"
     profile: str | None = None
 
-
 def save_global(auth: AWSAuth):
     GLOBAL_CFG.write_text(
-        yaml.safe_dump(auth.model_dump(by_alias=True)), encoding="utf‑8"
+        yaml.safe_dump(auth.model_dump(by_alias=True)), encoding='utf-8'
     )
-    GLOBAL_CFG.chmod(0o600)
-
+    try:
+        GLOBAL_CFG.chmod(0o600)
+    except (AttributeError, PermissionError):
+        pass  
 
 def load_global() -> AWSAuth | None:
     if not GLOBAL_CFG.exists():
