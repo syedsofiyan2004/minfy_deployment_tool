@@ -119,10 +119,3 @@ jobs:
         cd minfy-cli
         minfy monitor disable
 
-    - name: Upload monitor SSH key (optional)
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: monitor-ssh-key
-        path: minfy-cli/.minfy_monitor/minfy_monitor.pem
-        retention-days: 7
