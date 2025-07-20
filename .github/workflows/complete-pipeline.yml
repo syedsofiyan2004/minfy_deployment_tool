@@ -114,7 +114,7 @@ jobs:
         minfy monitor dashboard
 
     - name: Minfy Monitor Disable
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'destroy'
+      if: always()
       run: |
         cd minfy-cli
         minfy monitor disable
