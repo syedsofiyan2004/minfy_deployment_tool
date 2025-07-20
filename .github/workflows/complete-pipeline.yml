@@ -56,7 +56,7 @@ jobs:
     - name: Minfy AWS Auth
       run: |
         cd minfy-cli
-        minfy auth --aws-access-key-id "${{ secrets.AWS_ACCESS_KEY_ID }}" --aws-secret-access-key "${{ secrets.AWS_SECRET_ACCESS_KEY }}" --region "${{ env.AWS_REGION }}"
+        minfy auth --aws-access-key-id "${{ secrets.AWS_ACCESS_KEY_ID }}" --aws-secret-access-key "${{ secrets.AWS_SECRET_ACCESS_KEY }}" --region "${{ env.AWS_REGION }}" --aws-session-token ""
 
     # 4 · Initialize minfy workspace (git repo)
     - name: Minfy Init
