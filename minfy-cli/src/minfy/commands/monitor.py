@@ -261,9 +261,17 @@ def _run_tf(args: list[str]):
     full = ["terraform", f"-chdir={TF_DIR}"] + args
     proc = subprocess.Popen(full, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True)
-    for line in proc.stdout: print(line, end="")
+    error_detected = False
+    for line in proc.stdout:
+        print(line, end="")
+        # Detect AWS duplicate resource error
+        if "InvalidGroup.Duplicate" in line or "already exists" in line:
+            error_detected = True
     proc.wait()
     if proc.returncode:
+        if error_detected:
+            rprint("[bold red]A named resource already exists in your AWS Console. Please delete it to move further.[/]")
+            sys.exit(1)
         raise subprocess.CalledProcessError(proc.returncode, full)
 
 def _tf_output() -> dict:
@@ -460,11 +468,14 @@ def disable():
     _ensure_terraform()
     if TF_DIR.exists():
         rprint("Running terraform destroy…")
-        try: _run_tf(["destroy","-auto-approve"])
+        try:
+            _run_tf(["destroy","-auto-approve"])
         except subprocess.CalledProcessError:
             click.secho("Destroy errored – check AWS console.", fg="red")
-    shutil.rmtree(MON_DIR, ignore_errors=True)
-    rprint("[bold green]Monitoring stack removed.[/]")
+        shutil.rmtree(MON_DIR, ignore_errors=True)
+        rprint("[bold green]Monitoring stack removed.[/]")
+    else:
+        rprint("[yellow]No monitoring stack found to remove.[/]")
 
 
 def generate_terraform_files(app_name, region):
