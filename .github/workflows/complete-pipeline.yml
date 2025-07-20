@@ -73,20 +73,11 @@ jobs:
         minfy config list
         minfy config set SAMPLE_KEY=SAMPLE_VALUE
 
-
     # 7 · Deploy to AWS S3 (with optional env file)
     - name: Minfy Deploy
       run: |
         cd minfy-cli
         minfy deploy
-
-    # Debug: List and show config files after deploy
-    - name: Debug:List and show config files
-      run: |
-        cd minfy-cli
-        ls -l .minfy || echo ".minfy missing"
-        cat .minfy/__minfy_current.txt || echo "No __minfy_current.txt"
-        cat .minfy/status.json || echo "No status.json"
 
     # 8 · Check deployment status
     - name: Minfy Status

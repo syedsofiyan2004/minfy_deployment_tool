@@ -318,13 +318,15 @@ def _wait(ip:str, port:int, sec:int=300)->bool:
 def _write_files(site:str):
     MON_DIR.mkdir(exist_ok=True)
     (MON_DIR / "prometheus_data").mkdir(exist_ok=True)
-    # Read ECR image URI from .minfy/config.yaml
-    import yaml
-    config_path = Path('.minfy/config.yaml')
+    # Read ECR image URI from build.json
+    build_json_path = Path('build.json')
     ecr_image = None
-    if config_path.exists():
-        cfg = yaml.safe_load(config_path.read_text())
-        ecr_image = cfg.get('custom_exporter_image')
+    if build_json_path.exists():
+        try:
+            build_cfg = json.loads(build_json_path.read_text())
+            ecr_image = build_cfg.get('custom_exporter_image')
+        except Exception:
+            ecr_image = None
     compose = _COMPOSE_TPL
     if ecr_image:
         compose = compose.replace(

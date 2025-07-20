@@ -217,14 +217,13 @@ def deploy_cmd(env_file):
             subprocess.run(build_cmd, check=True)
             subprocess.run(push_cmd, check=True)
             click.secho(f"Custom exporter image pushed to ECR: {image_tag}", fg="green")
-            config_path = Path('.minfy/config.yaml')
-            import yaml
-            if config_path.exists():
-                cfg = yaml.safe_load(config_path.read_text())
+            build_json_path = Path('build.json')
+            if build_json_path.exists():
+                build_cfg = json.loads(build_json_path.read_text())
             else:
-                cfg = {}
-            cfg['custom_exporter_image'] = image_tag
-            config_path.write_text(yaml.safe_dump(cfg), encoding='utf-8')
+                build_cfg = {}
+            build_cfg['custom_exporter_image'] = image_tag
+            build_json_path.write_text(json.dumps(build_cfg, indent=2), encoding='utf-8')
         else:
             click.secho("Dockerfile.build not found; skipping custom exporter image build/push.", fg="yellow")
     except Exception as e:
