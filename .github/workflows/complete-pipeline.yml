@@ -81,7 +81,7 @@ jobs:
         minfy deploy
 
     # Debug: List and show config files after deploy
-    - name: Debug: List and show config files
+    - name: Debug:List and show config files
       run: |
         cd minfy-cli
         ls -l .minfy || echo ".minfy missing"
