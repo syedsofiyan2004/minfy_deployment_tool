@@ -85,8 +85,8 @@ jobs:
       run: |
         cd minfy-cli
         ls -l .minfy || echo ".minfy missing"
-        cat .minfy/config.yaml || echo "No config.yaml"
-        cat build.json || echo "No build.json"
+        cat .minfy/__minfy_current.txt || echo "No __minfy_current.txt"
+        cat .minfy/status.json || echo "No status.json"
 
     # 8 · Check deployment status
     - name: Minfy Status
