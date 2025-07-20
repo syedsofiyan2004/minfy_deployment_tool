@@ -16,9 +16,10 @@ RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
 
-FROM alpine AS static
-WORKDIR /static
-COPY --from=build /app/dist .
+FROM nginx:alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """,
     "cra": """\
 FROM node:20-alpine AS build
@@ -28,9 +29,10 @@ RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
 
-FROM alpine AS static
-WORKDIR /static
-COPY --from=build /app/build .
+FROM nginx:alpine
+COPY --from=build /app/build /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """,
     "angular": """\
 FROM node:20-alpine AS build
@@ -41,9 +43,10 @@ RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build -- --configuration production
 
-FROM alpine AS static
-WORKDIR /static
-COPY --from=build /app/{output_dir} .
+FROM nginx:alpine
+COPY --from=build /app/{output_dir} /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """,
     "next": """\
 FROM node:20-alpine AS build
@@ -53,9 +56,10 @@ RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN {build_cmd}
 
-FROM alpine AS static
-WORKDIR /static
-COPY --from=build /app/{output_dir} .
+FROM nginx:alpine
+COPY --from=build /app/{output_dir} /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """,
     "fallback": """\
 FROM node:20-alpine AS build
@@ -65,9 +69,10 @@ RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN {build_cmd}
 
-FROM alpine AS static
-WORKDIR /static
-COPY --from=build /app/{output_dir} .
+FROM nginx:alpine
+COPY --from=build /app/{output_dir} /usr/share/nginx/html
+EXPOSE 80
+CMD ["nginx", "-g", "daemon off;"]
 """,
 }
 
@@ -131,8 +136,12 @@ def _write_docker(app_dir: Path, plan: dict):
         output_dir=plan["output_dir"],
         build_cmd=plan["build_cmd"]
     )
-    
     dockerfile_path.write_text(dockerfile, encoding="utf-8")
+    # Write a build.json with the static output path for nginx
+    static_output_path = "/usr/share/nginx/html" if plan["requires_docker"] else plan["output_dir"]
+    build_json = Path("build.json")
+    plan["static_output_path"] = static_output_path
+    build_json.write_text(json.dumps(plan, indent=2))
     click.secho("Dockerfile.build written", fg="green")
 
 @click.command("detect")
