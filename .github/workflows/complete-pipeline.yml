@@ -40,12 +40,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e .
 
-    - name: Set up Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
-        cache-dependency-path: minfy-cli/package-lock.json
+    # Node.js setup removed (not needed; builds handled via Docker)
 
     - name: Set up Terraform CLI
       uses: hashicorp/setup-terraform@v3
