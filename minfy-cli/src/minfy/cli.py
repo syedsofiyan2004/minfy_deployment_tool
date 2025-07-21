@@ -10,7 +10,7 @@ from .commands.monitor import monitor_grp
 
 @click.group()
 def cli():
-    """minfy – simple deploy helper (work‑in‑progress)."""
+    """minfy – simple deploy helper created for Minfy By Syed Sofiyan"""
     pass
 
 

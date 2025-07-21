@@ -57,7 +57,7 @@ jobs:
     - name: Minfy Init
       run: |
         cd minfy-cli
-        minfy init --repo https://github.com/pandeyshivam-debug/recipe-finder-react || true
+        minfy init --repo https://github.com/maciekt07/TodoApp || true
 
     # 5 · Detect framework and create build plan
     - name: Minfy Detect
@@ -87,12 +87,11 @@ jobs:
 
     # 9 · Rollback (if needed)
     - name: Minfy Rollback
-      if: github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'rollback'
+      if: always()
       run: |
         cd minfy-cli
         minfy rollback
 
-    # 10 · Monitoring stack setup
     - name: Minfy Monitor Init
       run: |
         cd minfy-cli
@@ -118,4 +117,3 @@ jobs:
       run: |
         cd minfy-cli
         minfy monitor disable
-# Job Complete

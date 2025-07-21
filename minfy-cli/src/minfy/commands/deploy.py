@@ -188,45 +188,5 @@ def deploy_cmd(env_file):
         s3.put_object(Bucket=bucket, Key='__minfy_current.txt', Body=head_ver)
     except Exception as err:
         click.secho(f"Warning: unable to set version marker for index.html: {err}", fg='yellow')
-
-    try:
-        ecr_client = boto3.client("ecr", region_name=region)
-        repo_name = "minfy-custom-exporter"
-        try:
-            response = ecr_client.describe_repositories(repositoryNames=[repo_name])
-            repo_uri = response["repositories"][0]["repositoryUri"]
-        except ecr_client.exceptions.RepositoryNotFoundException:
-            response = ecr_client.create_repository(repositoryName=repo_name)
-            repo_uri = response["repository"]["repositoryUri"]
-        dockerfile_path = project_path / "Dockerfile.build"
-        if dockerfile_path.exists():
-            image_tag = f"{repo_uri}:latest"
-            repo_host = repo_uri.split('/')[0]
-            # Get ECR login password
-            login_pw = subprocess.check_output([
-                "aws", "ecr", "get-login-password", "--region", region
-            ], text=True).strip()
-            login_proc = subprocess.run([
-                "docker", "login", "--username", "AWS", "--password", login_pw, repo_host
-            ], check=True)
-            build_cmd = [
-                "docker", "build", "-f", str(dockerfile_path), "-t", image_tag, str(project_path)
-            ]
-            push_cmd = ["docker", "push", image_tag]
-            click.secho(f"Building Docker image for custom exporter: {image_tag}", fg="cyan")
-            subprocess.run(build_cmd, check=True)
-            subprocess.run(push_cmd, check=True)
-            click.secho(f"Custom exporter image pushed to ECR: {image_tag}", fg="green")
-            build_json_path = Path('build.json')
-            if build_json_path.exists():
-                build_cfg = json.loads(build_json_path.read_text())
-            else:
-                build_cfg = {}
-            build_cfg['custom_exporter_image'] = image_tag
-            build_json_path.write_text(json.dumps(build_cfg, indent=2), encoding='utf-8')
-        else:
-            click.secho("Dockerfile.build not found; skipping custom exporter image build/push.", fg="yellow")
-    except Exception as e:
-        click.secho(f"ECR push failed: {e}", fg="yellow")
     click.secho(f'Deployed: http://{bucket}.s3-website.{region}.amazonaws.com', fg='green')
     click.echo("Next: run minfy status or minfy rollback to manage deployments.")

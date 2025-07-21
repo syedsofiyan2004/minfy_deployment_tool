@@ -41,14 +41,6 @@ services:
     restart: unless-stopped
     ports: [ "9100:9100" ]
 
-  custom-exporter:
-    # Replace with your custom exporter image and config
-    image: yourorg/custom-exporter:latest
-    restart: unless-stopped
-    ports: [ "8000:8000" ]
-    # environment:
-    #   - VAR=value
-
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -57,7 +49,7 @@ services:
       - "./prometheus.yml:/etc/prometheus/prometheus.yml"
       - "./prometheus_data:/prometheus"
     ports: [ "9090:9090" ]
-    depends_on: [ blackbox, node-exporter, custom-exporter ]
+    depends_on: [ blackbox, node-exporter ]
 
   grafana:
     image: grafana/grafana:latest
@@ -89,10 +81,6 @@ scrape_configs:
   - job_name: 'node'
     static_configs:
       - targets: ['node-exporter:9100']
-
-  - job_name: 'custom'
-    static_configs:
-      - targets: ['custom-exporter:8000']
 """
 
 _USER_DATA_SH = """#!/bin/bash -xe
@@ -123,16 +111,11 @@ elif command -v yum >/dev/null 2>&1; then
   ln -s /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
 fi
 
-# Fix Prometheus data directory permissions
 mkdir -p /opt/monitor/prometheus_data
 sudo chown -R 65534:65534 /opt/monitor/prometheus_data
 
-# wait until dockerd answers
 for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done
 # ECR login using instance role
-AWS_REGION="ap-south-1"
-$(which aws) ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin 548242479231.dkr.ecr.ap-south-1.amazonaws.com
-
 mkdir -p /opt/monitor
 cat >/opt/monitor/docker-compose.yml <<'EOF_CMP'
 {compose}
@@ -293,7 +276,6 @@ def _run_tf(args: list[str]):
     error_detected = False
     for line in proc.stdout:
         print(line, end="")
-        # Detect AWS duplicate resource error
         if "InvalidGroup.Duplicate" in line or "already exists" in line:
             error_detected = True
     proc.wait()
@@ -318,21 +300,7 @@ def _wait(ip:str, port:int, sec:int=300)->bool:
 def _write_files(site:str):
     MON_DIR.mkdir(exist_ok=True)
     (MON_DIR / "prometheus_data").mkdir(exist_ok=True)
-    # Read ECR image URI from build.json
-    build_json_path = Path('build.json')
-    ecr_image = None
-    if build_json_path.exists():
-        try:
-            build_cfg = json.loads(build_json_path.read_text())
-            ecr_image = build_cfg.get('custom_exporter_image')
-        except Exception:
-            ecr_image = None
     compose = _COMPOSE_TPL
-    if ecr_image:
-        compose = compose.replace(
-            "image: yourorg/custom-exporter:latest",
-            f"image: {ecr_image}"
-        )
     prom    = _PROM_TPL.format(url=site)
     (MON_DIR / "docker-compose.yml").write_text(compose)
     (MON_DIR / "prometheus.yml").write_text(prom)
@@ -418,16 +386,13 @@ def dashboard():
         url = _tf_output()['grafana_url']['value']
     except Exception:
         click.secho("No monitoring stack – run ‘enable’ first.", fg="yellow"); return
-    # load project config to derive dashboard name
     proj_cfg = json.loads(config_file.read_text())
     repo_url = proj_cfg.get('repo', '')
-    # extract repo slug (remove .git suffix)
     repo_name = repo_url.rstrip('/').split('/')[-1]
     repo_name = repo_name[:-4] if repo_name.endswith('.git') else repo_name
     site = _site_url()
     db_dir = MON_DIR / "provisioning" / "dashboards"
     db_dir.mkdir(parents=True, exist_ok=True)
-    # determine deployment start time for dashboard default range
     bucket = _bucket_name(proj_cfg)
     region = _region()
     s3 = boto3.client('s3', region_name=region)
@@ -473,9 +438,6 @@ def dashboard():
             {"type": "timeseries", "title": "Node Disk Usage (%)",
              "gridPos": {"h":8,"w":12,"x":0,"y":24},
              "targets": [{"expr": "100 * (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes"}]},
-            {"type": "timeseries", "title": "Custom Exporter Requests",
-             "gridPos": {"h":8,"w":12,"x":12,"y":24},
-             "targets": [{"expr": "sum(rate(custom_exporter_requests_total[5m]))"}]}
         ]
     }
     file = db_dir / f"{uid}.json"
