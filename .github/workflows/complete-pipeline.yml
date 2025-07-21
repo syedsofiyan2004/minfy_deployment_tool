@@ -107,8 +107,8 @@ jobs:
         cd minfy-cli
         minfy monitor disable
 
-    - name: Minfy Monitor Cleanup
+    - name: Minfy Cleanup
       if: always()
       run: |
         cd minfy-cli
-        minfy monitor cleanup
+        minfy cleanup
