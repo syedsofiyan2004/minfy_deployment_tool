@@ -87,7 +87,7 @@ jobs:
 
     # 9 · Rollback (if needed)
     - name: Minfy Rollback
-      if: always()
+      if: github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'destroy'
       run: |
         cd minfy-cli
         minfy rollback
