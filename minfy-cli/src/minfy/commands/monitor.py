@@ -13,7 +13,6 @@ from ..config import load_global
 
 """
 Monitoring commands: provision, status, dashboard, and teardown for Prometheus/Grafana stack.
-
 All metrics shown in Grafana are real—Prometheus scrapes the blackbox-exporter
 to probe your site every 15 seconds (see static_configs in prometheus.yml).
 """
@@ -26,8 +25,7 @@ TFVARS_JSON    = TF_DIR / "terraform.tfvars.json"
 MON_SG_NAME    = "minfy-monitor-sg"
 MON_KP_NAME    = "minfy-monitor-key"
 DEFAULT_REGION = "ap-south-1"
-DEFAULT_AMI_ID = "ami-0a1235697f4afa8a4"          
-
+DEFAULT_AMI_ID = "ami-0a1235697f4afa8a4"
 _COMPOSE_TPL = """\
 version: "3.8"
 services:
@@ -58,7 +56,6 @@ services:
     ports: [ "3000:3000" ]
     depends_on: [ prometheus ]
 """
-
 _PROM_TPL = """\
 global:
   scrape_interval: 15s
@@ -85,8 +82,6 @@ scrape_configs:
 
 _USER_DATA_SH = """#!/bin/bash -xe
 exec > /var/log/minfy-monitor-user-data.log 2>&1
-
-# minimal docker install for both Amazon Linux & Ubuntu
 if command -v apt-get >/dev/null 2>&1; then
   apt-get update -y && apt-get install -y docker.io
   USERNAME=ubuntu
@@ -96,8 +91,6 @@ else
 fi
 systemctl enable --now docker
 usermod -aG docker $USERNAME || true
-
-# Install docker-compose on Ubuntu or via plugin for yum
 if command -v apt-get >/dev/null 2>&1; then
   # Install classic docker-compose binary
   apt-get install -y docker-compose
@@ -107,7 +100,6 @@ elif command -v yum >/dev/null 2>&1; then
   curl -fsSL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-${ARCH} \
     -o /usr/local/lib/docker/cli-plugins/docker-compose
   chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-  # Symlink plugin for older docker-compose command
   ln -s /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
 fi
 
@@ -214,6 +206,18 @@ resource "aws_security_group" "this" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
+  ingress {
+    from_port   = 9115
+    to_port     = 9115
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    from_port   = 9100
+    to_port     = 9100
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
   egress {
     from_port   = 0
     to_port     = 0
@@ -287,7 +291,8 @@ def _run_tf(args: list[str]):
 
 def _tf_output() -> dict:
     out = subprocess.check_output(
-        ["terraform", f"-chdir={TF_DIR}", "output", "-json"], text=True)
+        ["terraform", f"-chdir={TF_DIR}", "output", "-json"], stderr=subprocess.STDOUT, text=True
+    )
     return json.loads(out)
 
 def _wait(ip:str, port:int, sec:int=300)->bool:
@@ -317,23 +322,38 @@ def _write_files(site:str):
         "sg_name": MON_SG_NAME,
     }, indent=2))
 
-
 @click.group("monitor")
 def monitor_grp():
     """Group for all monitoring subcommands."""
     pass
-
 
 @monitor_grp.command("enable")
 def enable():
     """Enable monitoring stack on AWS via Terraform."""
     _ensure_terraform()
     site = _site_url()
+    prom_data_dir = MON_DIR / "prometheus_data"
+    if prom_data_dir.exists():
+        for item in prom_data_dir.iterdir():
+            if item.is_file() or item.is_symlink():
+                item.unlink()
+            elif item.is_dir():
+                shutil.rmtree(item)
     _write_files(site)
     rprint(f"Probing {site} every 15 seconds via blackbox-exporter")
 
-    rprint("Running terraform init…");   _run_tf(["init","-upgrade"])
-    rprint("Running terraform apply…"); _run_tf(["apply","-auto-approve"])
+    rprint("Running terraform init…")
+    try:
+        _run_tf(["init","-upgrade"])
+    except subprocess.CalledProcessError:
+        click.secho("Error initializing Terraform – please check your Terraform configuration.", fg="red")
+        sys.exit(1)
+    rprint("Running terraform apply…")
+    try:
+        _run_tf(["apply","-auto-approve"])
+    except subprocess.CalledProcessError:
+        click.secho("Error applying Terraform – please check your AWS configuration and permissions.", fg="red")
+        sys.exit(1)
 
     out = _tf_output()
     (MON_DIR / "id_rsa").write_text(out["private_key_pem"]["value"])
@@ -351,7 +371,6 @@ def enable():
     rprint(f"Grafana URL: {out['grafana_url']['value']} (admin/admin)")
     rprint("Next → Run [cyan]minfy monitor status[/cyan] to view your stack or [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
 
-
 @monitor_grp.command("status")
 def status():
     """Show monitoring stack endpoints and prompt for next actions."""
@@ -362,6 +381,20 @@ def status():
         return
     rprint(f"Prometheus URL: {out['prometheus_url']['value']}")
     rprint(f"Grafana URL: {out['grafana_url']['value']}")
+    try:
+        proj_cfg = json.loads(config_file.read_text())
+        bucket = _bucket_name(proj_cfg)
+        region = _region()
+        s3 = boto3.client('s3', region_name=region)
+        cur_vid = s3.get_object(Bucket=bucket, Key='__minfy_current.txt')['Body'].read().decode()
+        vers = s3.list_object_versions(Bucket=bucket, Prefix='index.html')['Versions']
+        deploy = next((v for v in vers if v['VersionId'] == cur_vid), None)
+        if deploy:
+            iso = deploy['LastModified'].astimezone(datetime.timezone.utc)
+            start = iso.strftime('%Y-%m-%d %H:%M:%SZ')
+            rprint(f"Site deployed at: {start} UTC")
+    except Exception:
+        pass
     rprint("Next → Run [cyan]minfy monitor dashboard[/cyan] to view your dashboards.")
   
 @monitor_grp.command("init")
@@ -373,17 +406,58 @@ def init():
         click.secho("Run ‘minfy deploy’ first.", fg="red")
         sys.exit(1)
     MON_DIR.mkdir(exist_ok=True)
+    prom_data_dir = MON_DIR / "prometheus_data"
+    if prom_data_dir.exists():
+        import shutil
+        shutil.rmtree(prom_data_dir)
+    prom_data_dir.mkdir(exist_ok=True)
     (MON_DIR / "docker-compose.yml").write_text(_COMPOSE_TPL)
     (MON_DIR / "prometheus.yml").write_text(_PROM_TPL.format(url=site))
     rprint("Local monitoring files created in .minfy_monitor")
     rprint("Next → [cyan]minfy monitor enable[/cyan] to provision on AWS .")
 
-
 @monitor_grp.command("dashboard")
 def dashboard():
     """Import and open Grafana dashboards in default browser."""
+    if not TF_DIR.exists():
+        click.secho("No monitoring stack – run ‘minfy monitor enable’ first.", fg="yellow")
+        return
     try:
-        url = _tf_output()['grafana_url']['value']
+        outputs = _tf_output()
+        url = outputs['grafana_url']['value']
+        prom_url = outputs['prometheus_url']['value']
+        auth = base64.b64encode(b"admin:admin").decode()
+        ds_payload = {
+            "name": "Prometheus",
+            "type": "prometheus",
+            "access": "proxy",
+            "url": prom_url,
+            "isDefault": True
+        }
+        ds_req = urllib.request.Request(
+            f"{url}/api/datasources",
+            data=json.dumps(ds_payload).encode('utf-8'),
+            headers={
+                'Content-Type': 'application/json',
+                'Authorization': f"Basic {auth}"
+            }
+        )
+        try:
+            urllib.request.urlopen(ds_req)
+            rprint("Configured Prometheus datasource in Grafana")
+        except Exception as e:
+            if not (hasattr(e, 'code') and getattr(e, 'code', None) == 409):
+                click.secho(f"Warning: failed to configure datasource: {e}", fg="yellow")
+        try:
+            info_req = urllib.request.Request(
+                f"{url}/api/datasources/name/Prometheus",
+                headers={'Authorization': f"Basic {auth}"}
+            )
+            with urllib.request.urlopen(info_req) as resp:
+                ds_info = json.loads(resp.read().decode())
+                ds_uid = ds_info.get('uid')
+        except Exception:
+            ds_uid = None
     except Exception:
         click.secho("No monitoring stack – run ‘enable’ first.", fg="yellow"); return
     proj_cfg = json.loads(config_file.read_text())
@@ -393,17 +467,24 @@ def dashboard():
     site = _site_url()
     db_dir = MON_DIR / "provisioning" / "dashboards"
     db_dir.mkdir(parents=True, exist_ok=True)
+    for old in db_dir.glob('*.json'):
+        old.unlink()
     bucket = _bucket_name(proj_cfg)
     region = _region()
     s3 = boto3.client('s3', region_name=region)
     try:
         cur_vid = s3.get_object(Bucket=bucket, Key='__minfy_current.txt')['Body'].read().decode()
         vers = s3.list_object_versions(Bucket=bucket, Prefix='index.html')['Versions']
-        deploy = next((v for v in vers if v['VersionId']==cur_vid), None)
-        iso = deploy['LastModified'].astimezone(datetime.timezone.utc)
-        start = iso.strftime('%Y-%m-%dT%H:%M:%SZ') if deploy else 'now-1h'
+        deploy = next((v for v in vers if v['VersionId'] == cur_vid), None)
+        if deploy:
+            iso = deploy['LastModified'].astimezone(datetime.timezone.utc)
+            start = iso.strftime('%Y-%m-%dT%H:%M:%SZ')
+        else:
+            now_utc = datetime.datetime.now(datetime.timezone.utc)
+            start = (now_utc - datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
     except Exception:
-        start = 'now-1h'
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        start = (now_utc - datetime.timedelta(hours=1)).strftime('%Y-%m-%dT%H:%M:%SZ')
     uid = f"{repo_name}-monitoring"
     title = f"{repo_name} Monitoring"
     default_dash = {
@@ -416,30 +497,35 @@ def dashboard():
             "time_options": ["5m","15m","1h","6h","12h","24h"]
         },
         "time": {"from": start, "to": "now"},
-        "panels": [
-            {"type": "timeseries", "title": "Uptime (%)",
-             "gridPos": {"h":8,"w":12,"x":0,"y":0},
-             "targets": [{"expr": f"avg_over_time(probe_success{{instance='{site}'}}[5m]) * 100"}]},
-            {"type": "timeseries", "title": "Latency P95 (s)",
-             "gridPos": {"h":8,"w":12,"x":12,"y":0},
-             "targets": [{"expr": f"histogram_quantile(0.95, sum by(le) (rate(probe_duration_seconds_bucket{{instance='{site}'}}[5m])))"}]},
-            {"type": "timeseries", "title": "Redirects/sec",
-             "gridPos": {"h":8,"w":12,"x":0,"y":8},
-             "targets": [{"expr": f"rate(probe_http_redirects{{instance='{site}'}}[5m])"}]},
-            {"type": "timeseries", "title": "Avg Content Size (bytes)",
-             "gridPos": {"h":8,"w":12,"x":12,"y":8},
-             "targets": [{"expr": f"avg_over_time(probe_http_content_length{{instance='{site}'}}[5m])"}]},
-            {"type": "timeseries", "title": "Node CPU Usage (%)",
-             "gridPos": {"h":8,"w":12,"x":0,"y":16},
-             "targets": [{"expr": "100 - avg(irate(node_cpu_seconds_total{mode='idle'}[5m])) * 100"}]},
-            {"type": "timeseries", "title": "Node Memory Usage (MB)",
-             "gridPos": {"h":8,"w":12,"x":12,"y":16},
-             "targets": [{"expr": "node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes"}]},
-            {"type": "timeseries", "title": "Node Disk Usage (%)",
-             "gridPos": {"h":8,"w":12,"x":0,"y":24},
-             "targets": [{"expr": "100 * (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes"}]},
-        ]
+        "panels": []
     }
+    panel_defs = [
+        {"type": "timeseries", "title": "Uptime (%)", "gridPos": {"h":8,"w":12,"x":0,"y":0},
+         "expr": f"avg_over_time(probe_success{{instance='{site}'}}[5m]) * 100", "field_defaults": {"nullValueMode": "null"}},
+        {"type": "timeseries", "title": "Latency (avg 5m) (s)", "gridPos": {"h":8,"w":12,"x":12,"y":0},
+         "expr": f"avg_over_time(probe_duration_seconds{{instance='{site}'}}[5m])", "field_defaults": {"nullValueMode": "null"}},
+        {"type": "timeseries", "title": "Redirects/sec", "gridPos": {"h":8,"w":12,"x":0,"y":8},
+         "expr": f"rate(probe_http_redirects{{instance='{site}'}}[5m])", "field_defaults": {"nullValueMode": "null"}},
+        {"type": "timeseries", "title": "Avg Content Size (bytes)", "gridPos": {"h":8,"w":12,"x":12,"y":8},
+         "expr": f"avg_over_time(probe_http_content_length{{instance='{site}'}}[5m])", "field_defaults": {"nullValueMode": "null"}},
+        {"type": "gauge", "title": "Node CPU Usage (%)", "gridPos": {"h":8,"w":12,"x":0,"y":16},
+         "expr": "100 - avg(irate(node_cpu_seconds_total{mode='idle'}[5m])) * 100", "field_defaults": {"unit": "percent"}},
+        {"type": "gauge", "title": "Node Memory Usage (MB)", "gridPos": {"h":8,"w":12,"x":12,"y":16},
+         "expr": "(node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / (1024*1024)", "field_defaults": {"unit": "decbytes"}},
+        {"type": "gauge", "title": "Node Disk Usage (%)", "gridPos": {"h":8,"w":12,"x":0,"y":24},
+         "expr": "max by(instance) (100 * (node_filesystem_size_bytes - node_filesystem_free_bytes) / node_filesystem_size_bytes)", "field_defaults": {"unit": "percent"}},
+    ]
+    panels = []
+    for pd in panel_defs:
+        panels.append({
+            "type": pd["type"],
+            "title": pd["title"],
+            "datasource": {"type": "prometheus", "uid": ds_uid},
+            "gridPos": pd["gridPos"],
+            "targets": [{"expr": pd["expr"]}],
+            "fieldConfig": {"defaults": pd["field_defaults"]}
+        })
+    default_dash["panels"] = panels
     file = db_dir / f"{uid}.json"
     file.write_text(json.dumps(default_dash, indent=2))
     prov = MON_DIR / "provisioning" / "dashboards"
@@ -478,7 +564,6 @@ def dashboard():
     rprint(f"Opening dashboard at {dash_url}")
     rprint("Next → Run [cyan]minfy monitor disable[/cyan] to remove monitoring stack.")
 
-
 @monitor_grp.command("disable")
 def disable():
     """Destroy monitoring stack and clean up local files."""
@@ -493,7 +578,6 @@ def disable():
         rprint("[bold green]Monitoring stack removed.[/]")
     else:
         rprint("[yellow]No monitoring stack found to remove.[/]")
-
 
 def generate_terraform_files(app_name, region):
     """Generate Terraform files for monitoring setup"""

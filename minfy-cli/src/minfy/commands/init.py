@@ -59,6 +59,10 @@ def find_app_directory(base_path: Path) -> str:
 )
 def init_cmd(repository_url: str):
     """Clone the repository and save initial project configuration."""
+    config_path = Path('.minfy/config.yaml')
+    if not config_path.exists():
+        click.secho("Run ‘minfy auth’ first to configure credentials.", fg='red')
+        sys.exit(1)
     ensure_git_available()
     MINFY_WORKSPACE_PATH.mkdir(exist_ok=True)
     repo_folder = get_repo_folder_name(repository_url)
@@ -68,7 +72,11 @@ def init_cmd(repository_url: str):
         click.secho(f'Repository already exists at {destination_path}', fg='yellow')
     else:
         click.secho(f'Cloning into {destination_path}...', fg='cyan')
-        run_command(['git', 'clone', '--depth', '1', repository_url, str(destination_path)])
+        result = run_command(['git', 'clone', '--depth', '1', repository_url, str(destination_path)])
+        if result.returncode != 0 or not destination_path.exists():
+            click.secho('ERROR: Invalid Git URL' \
+            'Please Enter a valid Git repository URL', fg='red')
+            sys.exit(1)
 
     app_folder = find_app_directory(destination_path)
     project_config = {

@@ -33,7 +33,8 @@ def format_time(dt) -> str:
 def status_cmd(verbose):
     """Show current deployment URL and version history."""
     if not config_file.exists():
-        click.secho("Run inside a minfy project.", fg="red")
+        click.secho("Run inside a minfy init or" \
+        " deploy your project running 'minfy deploy'.", fg="red")
         sys.exit(1)
 
     proj   = json.loads(Path(config_file).read_text())

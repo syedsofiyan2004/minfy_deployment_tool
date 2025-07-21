@@ -1,4 +1,4 @@
-name: CI / CD – minfy static-site pipeline
+name: CI-CD Pipeline for Minfy Deployment CLI Tool
 
 on:
   push:
@@ -22,13 +22,11 @@ jobs:
     timeout-minutes: 45
 
     steps:
-    # 1 · Checkout source
     - name: Checkout repo
       uses: actions/checkout@v4
       with:
         fetch-depth: 1
 
-    # 2 · Tool-chain setup
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
@@ -40,8 +38,6 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e .
 
-    # Node.js setup removed (not needed; builds handled via Docker)
-
     - name: Set up Terraform CLI
       uses: hashicorp/setup-terraform@v3
 
@@ -52,20 +48,16 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region:            ${{ env.AWS_REGION }}
 
-
-    # 4 · Initialize minfy workspace (git repo)
     - name: Minfy Init
       run: |
         cd minfy-cli
         minfy init --repo https://github.com/maciekt07/TodoApp || true
 
-    # 5 · Detect framework and create build plan
     - name: Minfy Detect
       run: |
         cd minfy-cli
         minfy detect
 
-    # 6 · Configure environment and variables
     - name: Minfy Config Env
       run: |
         cd minfy-cli
@@ -73,19 +65,16 @@ jobs:
         minfy config list
         minfy config set SAMPLE_KEY=SAMPLE_VALUE
 
-    # 7 · Deploy to AWS S3 (with optional env file)
     - name: Minfy Deploy
       run: |
         cd minfy-cli
         minfy deploy
 
-    # 8 · Check deployment status
     - name: Minfy Status
       run: |
         cd minfy-cli
         minfy status
 
-    # 9 · Rollback (if needed)
     - name: Minfy Rollback
       if: github.event_name == 'workflow_dispatch' && github.event.inputs.env == 'destroy'
       run: |
@@ -117,3 +106,9 @@ jobs:
       run: |
         cd minfy-cli
         minfy monitor disable
+
+    - name: Minfy Monitor Cleanup
+      if: always()
+      run: |
+        cd minfy-cli
+        minfy monitor cleanup

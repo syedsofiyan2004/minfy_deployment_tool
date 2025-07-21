@@ -15,11 +15,6 @@ COPY package*.json ./
 RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
-
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
 """,
     "cra": """\
 FROM node:20-alpine AS build
@@ -28,11 +23,6 @@ COPY package*.json ./
 RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
-
-FROM nginx:alpine
-COPY --from=build /app/build /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
 """,
     "angular": """\
 FROM node:20-alpine AS build
@@ -42,11 +32,6 @@ COPY package*.json ./
 RUN npm ci --legacy-peer-deps || npm install --legacy-peer-deps
 COPY . .
 RUN npm run build -- --configuration production
-
-FROM nginx:alpine
-COPY --from=build /app/{output_dir} /usr/share/nginx/html
-EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
 """,
     "next": """\
 FROM node:20-alpine AS build
@@ -137,8 +122,7 @@ def _write_docker(app_dir: Path, plan: dict):
         build_cmd=plan["build_cmd"]
     )
     dockerfile_path.write_text(dockerfile, encoding="utf-8")
-    # Write a build.json with the static output path for nginx
-    static_output_path = "/usr/share/nginx/html" if plan["requires_docker"] else plan["output_dir"]
+    static_output_path = f"/app/{plan['output_dir']}"
     build_json = Path("build.json")
     plan["static_output_path"] = static_output_path
     build_json.write_text(json.dumps(plan, indent=2))
@@ -152,6 +136,19 @@ def detect_cmd():
 
     project_config = json.loads(config_file.read_text())
     app_dir = Path(project_config["local_path"]) / project_config["app_subdir"]
+    docker_file = app_dir / 'Dockerfile'
+    skip_docker = False
+    if docker_file.exists():
+        try:
+            first_line = docker_file.read_text().splitlines()[0]
+        except Exception:
+            first_line = ''
+        if first_line.strip().upper().startswith('FROM'):
+            click.secho('Detected existing Dockerfile, keeping it as-is.', fg='green')
+            skip_docker = True
+        else:
+            click.secho('Existing Dockerfile appears invalid, will override.', fg='yellow')
+            skip_docker = False
 
     if (app_dir / "angular.json").exists():
         config = json.loads((app_dir / "angular.json").read_text())
@@ -167,37 +164,35 @@ def detect_cmd():
         }
         pkg = None
     else:
-        package_file = app_dir / "package.json"
-        if not package_file.exists():
-            click.secho(f"No package.json in {app_dir}", fg="red")
+        pkg_paths = list(app_dir.rglob("package.json"))
+        if not pkg_paths:
+            click.secho("Error: no package.json found in repository; cannot detect React app", fg="red")
             sys.exit(1)
-            
-        pkg = json.loads(package_file.read_text())
+        package_file = pkg_paths[0]
+        try:
+            pkg = json.loads(package_file.read_text())
+        except json.JSONDecodeError as e:
+            click.secho(f"Error: invalid package.json at {package_file}: {e}", fg="red")
+            sys.exit(1)
         all_deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
         build_scripts = pkg.get("scripts", {})
-        
         if "react-scripts" in all_deps:
-            plan = {
-                "builder": "cra", 
-                "build_cmd": "npm run build",
-                "output_dir": "build"
-            }
+            plan = {"builder": "cra", "build_cmd": "npm run build", "output_dir": "build"}
         elif "vite" in all_deps or re.search(r"\bvite\b", build_scripts.get("build", "")):
-            plan = {
-                "builder": "vite",
-                "build_cmd": "npm run build",
-                "output_dir": "dist" 
-            }
+            plan = {"builder": "vite", "build_cmd": "npm run build", "output_dir": "dist"}
         else:
-            plan = {"builder": "custom"}
-            plan["output_dir"] = click.prompt("Output directory?", default="build")
-            plan["build_cmd"] = click.prompt("Build command?", default="npm run build")
+            click.secho("Error: no supported JS framework detected; cannot build or detect project", fg="red")
+            sys.exit(1)
     plan['requires_docker'] = needs_docker(plan)
     plan['needs_env'] = needs_env(app_dir, pkg)
+    type_map = {'cra': 'React (CRA)', 'vite': 'Vite', 'angular': 'Angular'}
+    proj_type = type_map.get(plan['builder'], plan['builder'])
+    click.secho(f'Project type detected: {proj_type}', fg='cyan')
 
     build_file = Path("build.json")
     build_file.write_text(json.dumps(plan, indent=2))
-    _write_docker(app_dir, plan)
+    if not skip_docker:
+        _write_docker(app_dir, plan)
     click.secho("build.json created", fg="green")
     if plan['needs_env']:
         click.secho('You might need an .env file. Deploy with: minfy deploy --env-file path/to/.env', fg='yellow')
