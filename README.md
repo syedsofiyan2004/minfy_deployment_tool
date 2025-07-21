@@ -59,28 +59,6 @@ minfy config list
 minfy config env <env>
 ```
 
-## Testing & CI
-
-We use GitHub Actions to run tests and smoke-test the CLI on every push/PR.
-
-```yaml
-name: CI
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
-        with: python-version: '3.11'
-      - run: pip install . pytest
-      - run: pytest
-      - name: Smoke CLI
-        run: |
-          minfy --help
-          minfy status || true
-```
-
 ## Project Structure
 
 ```
@@ -104,4 +82,4 @@ minfy-cli/
 
 ---
 
-Build static sites to AWS as simply as `minfy deploy` – no AWS knowledge required!
+Build static sites to AWS as simply as `minfy deploy` no AWS knowledge required!
