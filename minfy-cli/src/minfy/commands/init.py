@@ -59,10 +59,6 @@ def find_app_directory(base_path: Path) -> str:
 )
 def init_cmd(repository_url: str):
     """Clone the repository and save initial project configuration."""
-    config_path = Path('.minfy/config.yaml')
-    if not config_path.exists():
-        click.secho("Run ‘minfy auth’ first to configure credentials.", fg='red')
-        sys.exit(1)
     ensure_git_available()
     MINFY_WORKSPACE_PATH.mkdir(exist_ok=True)
     repo_folder = get_repo_folder_name(repository_url)
