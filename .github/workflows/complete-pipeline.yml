@@ -17,7 +17,7 @@ env:
   MINFY_ENV: ${{ github.event.inputs.env || 'prod' }}
 
 jobs:
-  build-deploy-monitor:
+  Minfy-Deployment-CLI-Tool:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
